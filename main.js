@@ -7,7 +7,6 @@
 //       Copyright (C) 2016 StickyPassword.com                                 }
 //                                                                             }
 //*****************************************************************************}
-
 var self = require('sdk/self');
 var pageWorker = require('sdk/page-worker');
 var pageMod = require('sdk/page-mod');
@@ -182,6 +181,8 @@ function TspMainModule()
   this.BackgroundWorker = null;
   this.ContentWorker = null;
   this.ContentWorkers = new Array();
+  this.ContentWorkersDictFrameId = new Map();
+	this.ContentWorkersDictTabId = new Map();
   this.AttachBackgroundWorker();
   this.AttachContentWorkers();
 
@@ -762,6 +763,18 @@ TspMainModule.prototype.SendMessageToContent = function (AWorker, message)
     AWorker.port.emit('contentMessage', message);
 };
 
+TspMainModule.prototype.AddFrame = function (AWorker)
+{
+	var newframeId = Math.floor((Math.random() * 10000) + 1);
+	while (this.ContentWorkersDictFrameId.has(newframeId))
+	{
+		newframeId = Math.floor((Math.random() * 10000) + 1);
+	}
+
+	AWorker.frameId = newframeId;
+	this.ContentWorkersDictFrameId.set(newframeId, AWorker);
+}
+
 TspMainModule.prototype.AttachContentWorker = function (AWorker)
 {
   if (!AWorker)
@@ -770,14 +783,16 @@ TspMainModule.prototype.AttachContentWorker = function (AWorker)
   if (this.FindTopContentWorkerByTabId(AWorker.tab.id))
   {
     // any frame of top window, generate frameId for it
-    AWorker.frameId = Math.floor((Math.random() * 10000) + 1);
+    this.AddFrame(AWorker);
   }
   else
   {
     // top window, use empty string
     AWorker.frameId = 0;
+		this.ContentWorkersDictTabId.set(AWorker.tab.id, AWorker);
   }
   this.ContentWorkers.push(AWorker);
+
   if (this.Log.ContentWorkers)
     spLog.logMessage('TspMainModule.AttachContentWorker() ContentWorker attached, ' +
       'ContentWorkers.length: ' + this.ContentWorkers.length + ' ' +
@@ -793,6 +808,7 @@ TspMainModule.prototype.AttachContentWorker = function (AWorker)
   AWorker.port.on('contentMessage', function (message) {
     Self.csOnMessage(AWorker, message);
   });
+
 };
 
 TspMainModule.prototype.DetachContentWorker = function (AWorker)
@@ -813,6 +829,22 @@ TspMainModule.prototype.DetachContentWorker = function (AWorker)
         'ContentWorkers.length: ' + this.ContentWorkers.length
       );
   }
+	if (AWorker.frameId)
+	{
+		if (AWorker.frameId != 0)
+		{
+			this.ContentWorkersDictFrameId.delete(AWorker.frameId)
+		}
+		else
+		{
+			this.ContentWorkersDictTabId.delete(AWorker.tab.id)
+		}
+	}
+	else
+	{
+		this.ContentWorkersDictTabId.delete(AWorker.tab.id)
+	}
+	
 };
 
 TspMainModule.prototype.AttachContentWorkers = function ()
@@ -822,16 +854,17 @@ TspMainModule.prototype.AttachContentWorkers = function ()
     include: ['http://*', 'https://*', 'file://*'],
     attachTo: ['top', 'existing', 'frame'],
     contentScriptWhen: 'start',
-    contentScriptFile: [
-      self.data.url('spRequire.js'),
-      self.data.url('spLog.js'),
-      self.data.url('content/spStrings.js'),
-      self.data.url('content/spFormElementPrototype.js'),
-      self.data.url('content/spAutofillCore.js'),
-      self.data.url('content/spBrowserSpecificTools.js'),
-      self.data.url('content/spPageEventsMonitor.js'),
-      self.data.url('content/spContent.js')
-    ],
+    contentScript: [
+      self.data.load('spRequire.js'),
+      self.data.load('spLog.js'),
+      self.data.load('content/spStrings.js'),
+      self.data.load('content/spFormElementPrototype.js'),
+      self.data.load('content/spAutofillCore.js'),
+      self.data.load('content/spBrowserSpecificTools.js'),
+      self.data.load('content/spPageEventsMonitor.js'),
+      self.data.load('content/spContent.js')
+    ]
+,
     onAttach: function (AWorker) {
       Self.AttachContentWorker(AWorker);
     }
@@ -840,39 +873,43 @@ TspMainModule.prototype.AttachContentWorkers = function ()
 
 TspMainModule.prototype.FindTopContentWorkerByTabId = function (ATabId)
 {
-  for (var i = this.ContentWorkers.length-1; i >= 0; i--)
-  {
-    var worker = this.ContentWorkers[i];
     try
     {
-      if (worker.frameId)
-        continue; // skip frame ContentWorkers
-      if (worker.tab.id == ATabId)
-        return worker;
+			if (this.ContentWorkersDictTabId.has(ATabId))
+				return this.ContentWorkersDictTabId.get(ATabId);
     }
     catch (ErrorMessage)
     {
       spLog.logError('TspMainModule.FindTopContentWorkerByTabId() Error: ' + ErrorMessage);
     }
-  }
   return null;
 };
 
 TspMainModule.prototype.FindContentWorkerByTabAndFrameId = function (ATabId, AFrameId)
 {
-  for (var i = this.ContentWorkers.length-1; i >= 0; i--)
-  {
-    var worker = this.ContentWorkers[i];
     try
     {
-      if (worker.tab.id == ATabId && worker.frameId == AFrameId)
-        return worker;
+
+	if (AFrameId == 0)
+	{
+		if (this.ContentWorkersDictTabId.has(ATabId))
+		{
+			return this.ContentWorkersDictTabId.get(ATabId);
+		}
+	}
+	else
+	{
+		if (this.ContentWorkersDictFrameId.has(AFrameId))
+		{
+			return this.ContentWorkersDictFrameId.get(AFrameId);
+		}
+	}
+
     }
     catch (ErrorMessage)
     {
       spLog.logError('TspMainModule.FindContentWorkerByTabAndFrameId() Error: ' + ErrorMessage);
     }
-  }
   return null;
 };
 
